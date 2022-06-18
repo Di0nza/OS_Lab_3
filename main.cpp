@@ -1,114 +1,109 @@
-#include <iostream>
 #include <windows.h>
-#include <process.h>
+#include <iostream>
 #include <vector>
-CRITICAL_SECTION cs;
-std::vector<HANDLE> tArray;
-std::vector<HANDLE> tEvents;
+
+int arrSize;
+int *arr;
+int markerSize;
+HANDLE *_cantContinue;
+HANDLE *_stopT;
+HANDLE *_continueT;
 HANDLE _begin;
+CRITICAL_SECTION cs;
 
-struct UsefulData{
-    int size;
-    int* arr;
-    int num;
-    HANDLE _events[2];
-    UsefulData(int size1, int* arr1, int num1) : size(size1), arr(arr1), num(num1){
-        _events[0] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        _events[1] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    }
-};
-
-UINT WINAPI marker (void* p){
-    UsefulData* arg = static_cast<UsefulData*>(p);
-    std::cout<< "Signal";
-    WaitForSingleObject(_begin, INFINITE);
+void WINAPI marker(int num) {
+    WaitForSingleObject(_begin, INFINITY);
+    srand(num);
     std::vector<int> labeled;
-    std::srand(arg -> num);
-    while(true){
-        EnterCriticalSection(&cs);
-        int i = rand()%arg->num;
-        if(arg->arr[i] == 0){
-            Sleep(5);
-            arg->arr[i] = arg->num;
+    while (true) {
+        int i = rand() % arrSize;
+        if (arr[i] == 0) {
             labeled.push_back(i);
             Sleep(5);
-        }else{
-            std::cout << "Thread  " << arg ->num << " labeled: " << labeled.size() << " Unable to label: " << i;
+            arr[i] = num;
+            Sleep(5);
+        } else {
+            EnterCriticalSection(&cs);
+            std::cout << "Thread: " << num << std::endl << "Elements labeled: " << i << std::endl << "Unable to label: "
+                      << i << std::endl << std::endl;;
             LeaveCriticalSection(&cs);
-            SetEvent(tEvents[arg -> num-1]);
-            if(WaitForMultipleObjects(2, arg->_events, FALSE, INFINITE) - WAIT_OBJECT_0 == 1){
-                for(int j = 0; j < labeled.size(); j++){
-                    arg->arr[j] = 0;
+            SetEvent(_cantContinue[num]);
+
+
+            HANDLE _events[2];
+
+            _events[0] = _stopT[num];
+            _events[1] = _continueT[num];
+            WaitForMultipleObjects(2, _events, FALSE, INFINITE);
+            if (WaitForSingleObject(_stopT[num], 0) == WAIT_OBJECT_0) {
+                for (int j = 0; j < labeled.size(); j++) {
+                    arr[labeled[j]] = 0;
                 }
-                break;
+                return;
             }
+            ResetEvent(_continueT[num]);
+            ResetEvent(_cantContinue[num]);
         }
-        LeaveCriticalSection(&cs);
     }
-    return 0;
 }
 
-void print(int* arr, int size){
-    EnterCriticalSection(&cs);
-    for(int i = 0; i < size; i++){
-        std::cout<<arr[i];
-        std::cout<<" ";
+void print(int *arr, int size) {
+    for (int i = 0; i < size; i++) {
+        std::cout << arr[i] << " ";
     }
     std::cout << std::endl;
 }
 
 int main() {
-    std::vector<UsefulData> data;
+    InitializeCriticalSection(&cs);
     srand(time(0));
-    _begin = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-
-    std::cout << "Enter arr arrSize: " << std::endl;
-    int arrSize;
-    std:: cin >> arrSize;
-    int* arr = new int[arrSize];
-    for(int i = 0; i < arrSize; i ++){
+    std::cout << "Enter arr size: " << std::endl;
+    std::cin >> arrSize;
+    arr = new int[arrSize];
+    for (int i = 0; i < arrSize; i++) {
         arr[i] = 0;
     }
+    std::cout << "Enter amount of threads: " << std::endl;
 
-    std::cout<<"Enter amount of threads: "<< std:: endl;
-    int markerSize;
-    std::cin>>markerSize;
-    bool *isProcess = new bool[markerSize];
-    HANDLE _thread;
-    for(int i = 0; i < markerSize; i ++){
-        UsefulData* ud = new UsefulData(arrSize, arr, i+1);
-        _thread = reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, marker, ud, 0, nullptr));
-        if(_thread == 0){
-            std::cout<<"Error: Process not created"<<std::endl;
-            return GetLastError();
-        }
-        tEvents.push_back(CreateEvent(nullptr, TRUE, FALSE, nullptr));
-        if(tEvents[i] == nullptr){
-            return GetLastError();
-        }
-        isProcess[i] = true;
-        data.push_back(*ud);
+    std::cin >> markerSize;
+    HANDLE *_threads = new HANDLE[markerSize];
+    DWORD *IDs = new DWORD[markerSize];
+    _cantContinue = new HANDLE[markerSize];
+    _stopT = new HANDLE[markerSize];
+    _continueT = new HANDLE[markerSize];
+    _begin = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    for (int i = 0; i < markerSize; i++) {
+        _cantContinue[i] = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+        _stopT[i] = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+        _continueT[i] = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+        _threads[i] = CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE) marker, (LPVOID) i, 0, &IDs[i]);
     }
-    InitializeCriticalSection(&cs);
-    int finish;
-    for(int i = 0; i != markerSize; i++){
-        WaitForMultipleObjects(markerSize, &tEvents[0], TRUE, INFINITE);
-        print(arr,arrSize);
-        std::cout<<"Choose thread which should be finished:" << std::endl;
-        std::cin>> finish;
-        if(isProcess[finish] == true){
-            isProcess[finish-1]=false;
-            SetEvent(data[finish-1]._events[1]);
-            WaitForSingleObject(tArray[finish-1], INFINITE);
-            print(arr, arrSize);
-            for(int j = 0; j < markerSize; j++){
-                if(!isProcess[j]){
-                    ResetEvent(tEvents[j]);
-                    SetEvent(data[j]._events[0]);
-                }
+
+    SetEvent(_begin);
+
+    while (WaitForMultipleObjects(markerSize, _threads, TRUE, 0) != WAIT_OBJECT_0) {
+        WaitForMultipleObjects(markerSize, _cantContinue, TRUE, INFINITE);
+        EnterCriticalSection(&cs);
+        print(arr, arrSize);
+        int finishT;
+        std::cout << "Choose thread which should be finished:" << std::endl;
+        std::cin >> finishT;
+        if (finishT < 0 || finishT > markerSize - 1) {
+            std::cout << "No such stream exists!" << std::endl;
+            system("pause");
+        }
+        LeaveCriticalSection(&cs);
+        SetEvent(_stopT[finishT]);
+        WaitForSingleObject(_threads[finishT], INFINITE);
+        for (int i = 0; i < arrSize; i++) {
+            if (i != finishT) {
+                SetEvent(_continueT[i]);
             }
         }
+        EnterCriticalSection(&cs);
+        print(arr, arrSize);
+        LeaveCriticalSection(&cs);
     }
-    DeleteCriticalSection(&cs);
+    system("pause");
     return 0;
 }
